@@ -48,14 +48,21 @@
       right: 0;
       z-index: 20;
       display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 10px 14px;
-      background: linear-gradient(to bottom, rgba(0,0,0,0.8), transparent);
+      flex-direction: column;
+      gap: 8px;
+      padding: 10px 12px;
+      background: linear-gradient(to bottom, rgba(0,0,0,0.85), transparent);
       pointer-events: none;
     }
 
-    .top-bar > * {
+    .top-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      width: 100%;
+    }
+
+    .top-bar > *, .top-row > * {
       pointer-events: auto;
     }
 
@@ -95,6 +102,42 @@
     }
     .dot.good { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
     .dot.warn { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
+
+    /* Mode Toggle Switch on Primary Screen */
+    .mode-toggle-wrapper {
+      display: flex;
+      justify-content: center;
+      width: 100%;
+    }
+
+    .mode-toggle {
+      display: inline-flex;
+      background: var(--panel-bg);
+      backdrop-filter: blur(10px);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 3px;
+      gap: 4px;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+    }
+
+    .mode-btn {
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      padding: 5px 14px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.18s ease;
+    }
+
+    .mode-btn.active {
+      background: var(--accent);
+      color: #052e16;
+      box-shadow: 0 2px 8px rgba(16, 185, 129, 0.4);
+    }
 
     /* Main Camera Viewport */
     .viewport {
@@ -225,6 +268,11 @@
       text-overflow: ellipsis;
     }
 
+    .day-highlight {
+      color: #38bdf8;
+      font-weight: 600;
+    }
+
     /* Bottom Control Bar */
     .control-bar {
       position: absolute;
@@ -255,6 +303,13 @@
       font-size: 15px;
       font-weight: 600;
       position: relative;
+      transition: opacity 0.2s ease, transform 0.2s ease;
+    }
+
+    .btn-icon.hidden-mode {
+      opacity: 0;
+      pointer-events: none;
+      transform: scale(0.8);
     }
 
     .btn-shutter {
@@ -448,14 +503,24 @@
 
   <div class="flash-overlay" id="flash"></div>
 
-  <!-- Top Bar -->
+  <!-- Top Bar with Primary Mode Toggle -->
   <div class="top-bar">
-    <div class="brand-badge">
-      <span>🛰️ FieldCam v1</span>
+    <div class="top-row">
+      <div class="brand-badge">
+        <span>🛰️ FieldCam v1</span>
+      </div>
+      <div class="gps-pill" id="gps-pill">
+        <span class="dot" id="gps-dot"></span>
+        <span id="gps-status-text">Acquiring GPS...</span>
+      </div>
     </div>
-    <div class="gps-pill" id="gps-pill">
-      <span class="dot" id="gps-dot"></span>
-      <span id="gps-status-text">Acquiring GPS...</span>
+
+    <!-- Primary Screen Mode Toggle: Project Mode vs Default Mode -->
+    <div class="mode-toggle-wrapper">
+      <div class="mode-toggle">
+        <button class="mode-btn active" id="mode-btn-project" type="button">Project Mode</button>
+        <button class="mode-btn" id="mode-btn-default" type="button">Default Mode</button>
+      </div>
     </div>
   </div>
 
@@ -479,7 +544,7 @@
         <div class="coord-row" id="hud-latlon">Lat: --.------ | Lon: --.------</div>
         <div class="coord-row" id="hud-alt-acc">Alt: -- m | Acc: ±-- m</div>
         <div class="meta-sub" id="hud-notes">Notes: Field-validation</div>
-        <div class="meta-sub" id="hud-time">--</div>
+        <div class="meta-sub day-highlight" id="hud-time">📅 --</div>
       </div>
     </div>
   </div>
@@ -504,10 +569,10 @@
     </button>
   </div>
 
-  <!-- Metadata Configuration Drawer -->
+  <!-- Metadata Configuration Drawer (Used in Project Mode) -->
   <div class="drawer" id="drawer-meta">
     <div class="drawer-header">
-      <h2>FieldCam v1 — Metadata</h2>
+      <h2>FieldCam v1 — Project Metadata</h2>
       <button class="btn-close" id="btn-close-meta">Done</button>
     </div>
 
@@ -575,6 +640,7 @@
      * 1. STATE & CONFIGURATION
      **************************************************************/
     const state = {
+      mode: "project", // 'project' or 'default'
       lat: null,
       lon: null,
       accuracy: null,
@@ -603,7 +669,54 @@
     };
 
     /**************************************************************
-     * 2. LIVE LEAFLET PREVIEW MAP
+     * 2. DATE & DAY-OF-WEEK FORMATTER
+     **************************************************************/
+    function getFormattedDayAndDate(dateObj) {
+      const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+      const dayName = days[dateObj.getDay()];
+      const dd = String(dateObj.getDate()).padStart(2, "0");
+      const mm = String(dateObj.getMonth() + 1).padStart(2, "0");
+      const yyyy = dateObj.getFullYear();
+      const hh = String(dateObj.getHours()).padStart(2, "0");
+      const min = String(dateObj.getMinutes()).padStart(2, "0");
+      const ss = String(dateObj.getSeconds()).padStart(2, "0");
+      return {
+        dayName,
+        localFormatted: `${dayName}, ${dd}/${mm}/${yyyy}, ${hh}:${min}:${ss}`,
+        utcFormatted: dateObj.toISOString().replace("T", " ").slice(0, 19) + " UTC"
+      };
+    }
+
+    /**************************************************************
+     * 3. MODE SWITCHING (PROJECT MODE VS DEFAULT MODE)
+     **************************************************************/
+    function setAppMode(newMode) {
+      state.mode = newMode;
+      const btnProject = document.getElementById("mode-btn-project");
+      const btnDefault = document.getElementById("mode-btn-default");
+      const btnMeta = document.getElementById("btn-open-meta");
+      const hudNotes = document.getElementById("hud-notes");
+
+      if (newMode === "project") {
+        btnProject.classList.add("active");
+        btnDefault.classList.remove("active");
+        btnMeta.classList.remove("hidden-mode");
+        hudNotes.style.display = "block";
+      } else {
+        btnDefault.classList.add("active");
+        btnProject.classList.remove("active");
+        // Hide metadata button in Default Mode since it uses automatic preset
+        btnMeta.classList.add("hidden-mode");
+        hudNotes.style.display = "none";
+      }
+      syncHudLabels();
+    }
+
+    document.getElementById("mode-btn-project").addEventListener("click", () => setAppMode("project"));
+    document.getElementById("mode-btn-default").addEventListener("click", () => setAppMode("default"));
+
+    /**************************************************************
+     * 4. LIVE LEAFLET PREVIEW MAP
      **************************************************************/
     const map = L.map("live-map", {
       zoomControl: false,
@@ -634,7 +747,7 @@
     });
 
     /**************************************************************
-     * 3. CAMERA ENGINE
+     * 5. CAMERA ENGINE
      **************************************************************/
     async function initCamera() {
       if (state.stream) {
@@ -663,7 +776,7 @@
     });
 
     /**************************************************************
-     * 4. REVERSE GEOCODING (PLACE NAME FROM GPS)
+     * 6. REVERSE GEOCODING (PLACE NAME FROM GPS)
      **************************************************************/
     function getDistanceMeters(lat1, lon1, lat2, lon2) {
       if (lat1 === null || lat2 === null) return Infinity;
@@ -680,15 +793,17 @@
     }
 
     function getActivePlaceName() {
-      const override = document.getElementById("input-place-override").value.trim();
-      return override || state.placeName;
+      if (state.mode === "project") {
+        const override = document.getElementById("input-place-override").value.trim();
+        if (override) return override;
+      }
+      return state.placeName;
     }
 
     async function updatePlaceName(lat, lon) {
       const now = Date.now();
       const movedDist = getDistanceMeters(state.lastGeocodeLat, state.lastGeocodeLon, lat, lon);
 
-      // Only query API if moved > 25m or at least 15s elapsed since last lookup
       if (movedDist < 25 && now - state.lastGeocodeTime < 15000) return;
 
       state.lastGeocodeLat = lat;
@@ -696,7 +811,6 @@
       state.lastGeocodeTime = now;
 
       try {
-        // Primary: OpenStreetMap Nominatim
         const res = await fetch(
           `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1`,
           { headers: { "Accept-Language": "en" } }
@@ -711,7 +825,6 @@
             addr.state
           ].filter(Boolean);
 
-          // Deduplicate adjacent identical names
           const uniqueParts = [...new Set(parts)];
           if (uniqueParts.length > 0) {
             state.placeName = uniqueParts.join(", ");
@@ -726,7 +839,6 @@
       }
 
       try {
-        // Fallback: BigDataCloud Free Client Reverse Geocoder
         const res2 = await fetch(
           `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=en`
         );
@@ -745,7 +857,7 @@
     }
 
     /**************************************************************
-     * 5. HIGH-ACCURACY GEOLOCATION ENGINE
+     * 7. HIGH-ACCURACY GEOLOCATION ENGINE
      **************************************************************/
     function toDMS(deg, isLat) {
       const absolute = Math.abs(deg);
@@ -783,11 +895,12 @@
           document.getElementById("hud-alt-acc").textContent =
             `Alt: ${altStr} | Acc: ±${acc}m`;
 
-          const zoom = parseInt(document.getElementById("input-zoom").value, 10);
+          const zoom = state.mode === "project"
+            ? parseInt(document.getElementById("input-zoom").value, 10)
+            : 18;
           map.setView([state.lat, state.lon], zoom);
           posMarker.setLatLng([state.lat, state.lon]);
 
-          // Trigger Place Name Lookup
           updatePlaceName(state.lat, state.lon);
         },
         (err) => {
@@ -801,14 +914,17 @@
       );
     }
 
-    setInterval(() => {
+    // Live clock update showing Day of Week + Date + Time
+    function updateLiveClock() {
       const now = new Date();
+      const { localFormatted, utcFormatted } = getFormattedDayAndDate(now);
       document.getElementById("hud-time").textContent =
-        now.toLocaleString() + " (" + now.toISOString().slice(11, 19) + " UTC)";
-    }, 1000);
+        `📅 ${localFormatted} (${utcFormatted.slice(11)})`;
+    }
+    setInterval(updateLiveClock, 1000);
 
     /**************************************************************
-     * 6. SLIPPY MAP TILE COMPOSITOR FOR CANVAS WATERMARKING
+     * 8. SLIPPY MAP TILE COMPOSITOR FOR CANVAS WATERMARKING
      **************************************************************/
     function latLonToTileXY(lat, lon, zoom) {
       const n = Math.pow(2, zoom);
@@ -867,7 +983,6 @@
         });
       }
 
-      // Crosshair grid
       ctx.strokeStyle = "rgba(255, 255, 255, 0.25)";
       ctx.lineWidth = 1;
       ctx.beginPath();
@@ -877,7 +992,6 @@
       ctx.lineTo(boxSize, boxSize / 2);
       ctx.stroke();
 
-      // Accuracy halo & center pin
       ctx.beginPath();
       ctx.arc(boxSize / 2, boxSize / 2, boxSize * 0.11, 0, Math.PI * 2);
       ctx.fillStyle = "rgba(16, 185, 129, 0.28)";
@@ -894,7 +1008,6 @@
       ctx.strokeStyle = "#ffffff";
       ctx.stroke();
 
-      // North badge
       const badgeH = Math.max(18, Math.round(boxSize * 0.12));
       const badgeW = Math.max(24, Math.round(boxSize * 0.15));
       ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
@@ -904,7 +1017,6 @@
       ctx.textAlign = "center";
       ctx.fillText("▲N", boxSize - badgeW / 2 - 6, 6 + badgeH * 0.74);
 
-      // Layer & Zoom badge
       const zW = Math.max(54, Math.round(boxSize * 0.34));
       ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
       ctx.fillRect(6, boxSize - badgeH - 6, zW, badgeH);
@@ -917,7 +1029,7 @@
     }
 
     /**************************************************************
-     * 7. PORTRAIT-SAFE CANVAS TEXT FITTER & CAPTURE PIPELINE
+     * 9. PORTRAIT-SAFE CANVAS TEXT FITTER & CAPTURE PIPELINE
      **************************************************************/
     function roundRect(ctx, x, y, w, h, r) {
       ctx.beginPath();
@@ -929,7 +1041,6 @@
       ctx.closePath();
     }
 
-    // Guarantees a line of text NEVER overflows maxWidth by dynamically scaling font size down
     function drawFittedLine(ctx, text, x, y, maxWidth, baseSize, fontFamily, fontWeight, color) {
       let fontSize = baseSize;
       ctx.fillStyle = color;
@@ -975,7 +1086,6 @@
       const cardY = height - cardHeight - pad;
       const innerPad = Math.round(cardHeight * 0.065);
 
-      // Draw translucent dark backdrop card
       ctx.save();
       roundRect(ctx, pad, cardY, cardWidth, cardHeight, Math.round(cardHeight * 0.08));
       ctx.fillStyle = "rgba(15, 23, 42, 0.86)";
@@ -989,7 +1099,9 @@
       const mapSize = cardHeight - innerPad * 2;
       const mapX = pad + innerPad;
       const mapY = cardY + innerPad;
-      const zoom = parseInt(document.getElementById("input-zoom").value, 10);
+      const zoom = state.mode === "project"
+        ? parseInt(document.getElementById("input-zoom").value, 10)
+        : 18;
 
       const mapCanvas = await renderEmbeddedMapCanvas(
         state.lat,
@@ -1013,139 +1125,242 @@
       ctx.stroke();
       ctx.restore();
 
-      // 4. Portrait-Safe Telemetry Text Column (7 evenly spaced rows)
+      // 4. Prepare Common Telemetry Values
       const textX = mapX + mapSize + innerPad * 1.2;
       const maxTextWidth = (pad + cardWidth) - textX - innerPad;
 
-      const project = document.getElementById("input-project").value.trim();
-      const plotId = document.getElementById("input-plot").value.trim();
-      const lulcClass = document.getElementById("input-class").value;
-      const notes = document.getElementById("input-notes").value.trim();
       const placeName = getActivePlaceName();
       const now = new Date();
+      const { dayName, localFormatted, utcFormatted } = getFormattedDayAndDate(now);
 
-      const totalRows = 7;
-      const usableH = mapSize;
-      const rowStep = usableH / totalRows;
-      let rowY = mapY + rowStep * 0.78;
-
-      // Row 1: Plot ID + Validation Class + App Name (FieldCam v1)
-      drawFittedLine(
-        ctx,
-        `${plotId} • ${lulcClass.toUpperCase()}   [FieldCam v1]`,
-        textX,
-        rowY,
-        maxTextWidth,
-        Math.round(rowStep * 0.74),
-        "sans-serif",
-        "bold",
-        "#10b981"
-      );
-
-      // Row 2: Place Name (Reverse Geocoded Location)
-      rowY += rowStep;
-      drawFittedLine(
-        ctx,
-        `📍 ${placeName}`,
-        textX,
-        rowY,
-        maxTextWidth,
-        Math.round(rowStep * 0.68),
-        "sans-serif",
-        "bold",
-        "#fde68a"
-      );
-
-      // Row 3: Decimal Coordinates
-      rowY += rowStep;
       const decStr = state.lat !== null && state.lon !== null
         ? `GPS: ${state.lat.toFixed(6)}° N, ${state.lon.toFixed(6)}° E`
         : "GPS: Coordinates Unacquired";
-      drawFittedLine(
-        ctx,
-        decStr,
-        textX,
-        rowY,
-        maxTextWidth,
-        Math.round(rowStep * 0.68),
-        "monospace",
-        "bold",
-        "#ffffff"
-      );
 
-      // Row 4: DMS Coordinates
-      rowY += rowStep;
       const dmsStr = state.lat !== null && state.lon !== null
         ? `DMS: ${toDMS(state.lat, true)}  ${toDMS(state.lon, false)}`
         : "DMS: N/A";
-      drawFittedLine(
-        ctx,
-        dmsStr,
-        textX,
-        rowY,
-        maxTextWidth,
-        Math.round(rowStep * 0.64),
-        "monospace",
-        "normal",
-        "#e2e8f0"
-      );
 
-      // Row 5: Altitude, Accuracy & Map Info
-      rowY += rowStep;
       const altText = state.altitude !== null ? `${Math.round(state.altitude)}m ASL` : "N/A";
       const accText = state.accuracy !== null ? `±${Math.round(state.accuracy)}m` : "N/A";
-      drawFittedLine(
-        ctx,
-        `Alt: ${altText}  |  Acc: ${accText}  |  Map: ${TILE_SERVERS[state.mapLayer].name} (Z${zoom})`,
-        textX,
-        rowY,
-        maxTextWidth,
-        Math.round(rowStep * 0.64),
-        "monospace",
-        "normal",
-        "#cbd5e1"
-      );
 
-      // Row 6: Project & Field Notes
-      rowY += rowStep;
-      drawFittedLine(
-        ctx,
-        `Project: ${project} — Notes: ${notes}`,
-        textX,
-        rowY,
-        maxTextWidth,
-        Math.round(rowStep * 0.62),
-        "sans-serif",
-        "normal",
-        "#cbd5e1"
-      );
+      let plotId = "DEFAULT";
+      let project = "Default Preset";
+      let lulcClass = "Geo-Tag";
+      let notes = "";
 
-      // Row 7: Local & UTC Timestamps
-      rowY += rowStep;
-      const utcCompact = now.toISOString().replace("T", " ").slice(0, 19) + " UTC";
-      drawFittedLine(
-        ctx,
-        `${now.toLocaleString()}  |  ${utcCompact}`,
-        textX,
-        rowY,
-        maxTextWidth,
-        Math.round(rowStep * 0.58),
-        "monospace",
-        "normal",
-        "#94a3b8"
-      );
+      if (state.mode === "project") {
+        // PROJECT MODE: 7-Row Layout with Full Metadata
+        project = document.getElementById("input-project").value.trim();
+        plotId = document.getElementById("input-plot").value.trim();
+        lulcClass = document.getElementById("input-class").value;
+        notes = document.getElementById("input-notes").value.trim();
+
+        const totalRows = 7;
+        const rowStep = mapSize / totalRows;
+        let rowY = mapY + rowStep * 0.78;
+
+        // Row 1: Plot ID + Validation Class + App Name
+        drawFittedLine(
+          ctx,
+          `${plotId} • ${lulcClass.toUpperCase()}   [FieldCam v1]`,
+          textX,
+          rowY,
+          maxTextWidth,
+          Math.round(rowStep * 0.74),
+          "sans-serif",
+          "bold",
+          "#10b981"
+        );
+
+        // Row 2: Place Name
+        rowY += rowStep;
+        drawFittedLine(
+          ctx,
+          `📍 ${placeName}`,
+          textX,
+          rowY,
+          maxTextWidth,
+          Math.round(rowStep * 0.68),
+          "sans-serif",
+          "bold",
+          "#fde68a"
+        );
+
+        // Row 3: Decimal Coordinates
+        rowY += rowStep;
+        drawFittedLine(
+          ctx,
+          decStr,
+          textX,
+          rowY,
+          maxTextWidth,
+          Math.round(rowStep * 0.68),
+          "monospace",
+          "bold",
+          "#ffffff"
+        );
+
+        // Row 4: DMS Coordinates
+        rowY += rowStep;
+        drawFittedLine(
+          ctx,
+          dmsStr,
+          textX,
+          rowY,
+          maxTextWidth,
+          Math.round(rowStep * 0.64),
+          "monospace",
+          "normal",
+          "#e2e8f0"
+        );
+
+        // Row 5: Altitude, Accuracy & Map Info
+        rowY += rowStep;
+        drawFittedLine(
+          ctx,
+          `Alt: ${altText}  |  Acc: ${accText}  |  Map: ${TILE_SERVERS[state.mapLayer].name} (Z${zoom})`,
+          textX,
+          rowY,
+          maxTextWidth,
+          Math.round(rowStep * 0.64),
+          "monospace",
+          "normal",
+          "#cbd5e1"
+        );
+
+        // Row 6: Project & Field Notes
+        rowY += rowStep;
+        drawFittedLine(
+          ctx,
+          `Project: ${project} — Notes: ${notes}`,
+          textX,
+          rowY,
+          maxTextWidth,
+          Math.round(rowStep * 0.62),
+          "sans-serif",
+          "normal",
+          "#cbd5e1"
+        );
+
+        // Row 7: Day of Week + Date + Local & UTC Timestamps
+        rowY += rowStep;
+        drawFittedLine(
+          ctx,
+          `📅 ${localFormatted}  |  UTC: ${utcFormatted}`,
+          textX,
+          rowY,
+          maxTextWidth,
+          Math.round(rowStep * 0.60),
+          "monospace",
+          "bold",
+          "#38bdf8"
+        );
+      } else {
+        // DEFAULT MODE: Clean 6-Row Preset Layout (No custom metadata inputs)
+        const totalRows = 6;
+        const rowStep = mapSize / totalRows;
+        let rowY = mapY + rowStep * 0.78;
+
+        // Row 1: App Brand Header Preset
+        drawFittedLine(
+          ctx,
+          `FieldCam v1  •  GEO-STAMP PRESET`,
+          textX,
+          rowY,
+          maxTextWidth,
+          Math.round(rowStep * 0.72),
+          "sans-serif",
+          "bold",
+          "#10b981"
+        );
+
+        // Row 2: Place Name
+        rowY += rowStep;
+        drawFittedLine(
+          ctx,
+          `📍 ${placeName}`,
+          textX,
+          rowY,
+          maxTextWidth,
+          Math.round(rowStep * 0.66),
+          "sans-serif",
+          "bold",
+          "#fde68a"
+        );
+
+        // Row 3: Decimal Coordinates
+        rowY += rowStep;
+        drawFittedLine(
+          ctx,
+          decStr,
+          textX,
+          rowY,
+          maxTextWidth,
+          Math.round(rowStep * 0.66),
+          "monospace",
+          "bold",
+          "#ffffff"
+        );
+
+        // Row 4: DMS Coordinates
+        rowY += rowStep;
+        drawFittedLine(
+          ctx,
+          dmsStr,
+          textX,
+          rowY,
+          maxTextWidth,
+          Math.round(rowStep * 0.62),
+          "monospace",
+          "normal",
+          "#e2e8f0"
+        );
+
+        // Row 5: Altitude, Accuracy & Map Info
+        rowY += rowStep;
+        drawFittedLine(
+          ctx,
+          `Alt: ${altText}  |  Acc: ${accText}  |  Map: ${TILE_SERVERS[state.mapLayer].name} (Z${zoom})`,
+          textX,
+          rowY,
+          maxTextWidth,
+          Math.round(rowStep * 0.62),
+          "monospace",
+          "normal",
+          "#cbd5e1"
+        );
+
+        // Row 6: Day of Week + Date + Local & UTC Timestamps
+        rowY += rowStep;
+        drawFittedLine(
+          ctx,
+          `📅 ${localFormatted}  |  UTC: ${utcFormatted}`,
+          textX,
+          rowY,
+          maxTextWidth,
+          Math.round(rowStep * 0.58),
+          "monospace",
+          "bold",
+          "#38bdf8"
+        );
+      }
 
       // 5. Save JPEG and Log Entry
       const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
-      const safePlot = plotId.replace(/[^a-zA-Z0-9_-]/g, "_");
-      const filename = `${safePlot}_${now.toISOString().slice(0, 19).replace(/[:T]/g, "-")}.jpg`;
+      const safePrefix = state.mode === "project"
+        ? plotId.replace(/[^a-zA-Z0-9_-]/g, "_")
+        : "FieldCam";
+      const filename = `${safePrefix}_${dayName.slice(0, 3)}_${now.toISOString().slice(0, 19).replace(/[:T]/g, "-")}.jpg`;
 
       const record = {
         id: state.captures.length + 1,
+        mode: state.mode,
         plotId,
         project,
         lulcClass,
         placeName,
+        dayOfWeek: dayName,
         lat: state.lat,
         lon: state.lon,
         altitude: state.altitude,
@@ -1160,27 +1375,34 @@
       document.getElementById("capture-count").textContent = state.captures.length;
       renderGallery();
 
-      // Auto-increment Plot ID for next sample
-      const nextPlot = autoIncrementPlotId(plotId);
-      document.getElementById("input-plot").value = nextPlot;
-      syncHudLabels();
+      if (state.mode === "project") {
+        const nextPlot = autoIncrementPlotId(plotId);
+        document.getElementById("input-plot").value = nextPlot;
+        syncHudLabels();
+      }
     });
 
     /**************************************************************
-     * 8. UI DRAWERS, HUD SYNC & GIS EXPORTS (CSV / GEOJSON)
+     * 10. UI DRAWERS, HUD SYNC & GIS EXPORTS (CSV / GEOJSON)
      **************************************************************/
     function syncHudLabels() {
-      document.getElementById("hud-plot").textContent =
-        document.getElementById("input-plot").value;
-      document.getElementById("hud-class").textContent =
-        document.getElementById("input-class").value;
+      if (state.mode === "project") {
+        document.getElementById("hud-plot").textContent =
+          document.getElementById("input-plot").value;
+        document.getElementById("hud-class").textContent =
+          document.getElementById("input-class").value;
+        document.getElementById("hud-notes").textContent =
+          "Notes: " + document.getElementById("input-notes").value;
+      } else {
+        document.getElementById("hud-plot").textContent = "FieldCam v1";
+        document.getElementById("hud-class").textContent = "Geo-Stamp Preset";
+      }
       document.getElementById("hud-place").textContent =
         "📍 " + getActivePlaceName();
-      document.getElementById("hud-notes").textContent =
-        "Notes: " + document.getElementById("input-notes").value;
     }
 
     document.getElementById("btn-open-meta").addEventListener("click", () => {
+      if (state.mode !== "project") return;
       document.getElementById("drawer-meta").classList.add("open");
     });
 
@@ -1206,7 +1428,7 @@
           <img src="${item.dataUrl}" alt="${item.plotId}" />
           <div class="photo-card-footer">
             <div>
-              <strong>${item.plotId}</strong> (${item.lulcClass})<br/>
+              <strong>${item.mode === "project" ? item.plotId : "Default Preset"}</strong> (${item.dayOfWeek})<br/>
               <span style="color:#fde68a;font-size:11px;">${item.placeName}</span><br/>
               <span style="color:#94a3b8;font-size:10.5px;">
                 ${item.lat ? item.lat.toFixed(5) + ", " + item.lon.toFixed(5) : "No GPS"}
@@ -1225,10 +1447,12 @@
       if (!state.captures.length) return alert("No field validation points captured yet.");
       const headers = [
         "id",
+        "mode",
         "plot_id",
         "project",
         "validation_class",
         "place_name",
+        "day_of_week",
         "latitude",
         "longitude",
         "altitude_m",
@@ -1240,16 +1464,18 @@
       const rows = state.captures.map((c) =>
         [
           c.id,
+          `"${c.mode}"`,
           `"${c.plotId}"`,
           `"${c.project}"`,
           `"${c.lulcClass}"`,
           `"${(c.placeName || "").replace(/"/g, '""')}"`,
+          `"${c.dayOfWeek}"`,
           c.lat ?? "",
           c.lon ?? "",
           c.altitude ?? "",
           c.accuracy ?? "",
           c.timestampISO,
-          `"${c.notes.replace(/"/g, '""')}"`,
+          `"${(c.notes || "").replace(/"/g, '""')}"`,
           `"${c.filename}"`
         ].join(",")
       );
@@ -1275,10 +1501,12 @@
             },
             properties: {
               id: c.id,
+              mode: c.mode,
               plot_id: c.plotId,
               project: c.project,
               validation_class: c.lulcClass,
               place_name: c.placeName,
+              day_of_week: c.dayOfWeek,
               gps_accuracy_m: c.accuracy,
               timestamp_utc: c.timestampISO,
               notes: c.notes,
@@ -1295,6 +1523,7 @@
 
     // Boot Application
     window.addEventListener("DOMContentLoaded", () => {
+      updateLiveClock();
       syncHudLabels();
       initCamera();
       initGeolocation();
