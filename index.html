@@ -1,0 +1,1121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>FieldView — Geo-Camera Field Validation</title>
+  
+  <!-- Leaflet CSS & JS for Live Viewfinder Mini-Map -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+
+  <style>
+    :root {
+      --bg-dark: #0f172a;
+      --panel-bg: rgba(15, 23, 42, 0.82);
+      --accent: #10b981;
+      --accent-hover: #059669;
+      --warn: #f59e0b;
+      --danger: #ef4444;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --border: rgba(255, 255, 255, 0.14);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, monospace;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    body {
+      background: var(--bg-dark);
+      color: var(--text-main);
+      height: 100dvh;
+      width: 100vw;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Top Status Bar */
+    .top-bar {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 20;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 14px;
+      background: linear-gradient(to bottom, rgba(0,0,0,0.8), transparent);
+      pointer-events: none;
+    }
+
+    .top-bar > * {
+      pointer-events: auto;
+    }
+
+    .brand-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--panel-bg);
+      backdrop-filter: blur(8px);
+      padding: 6px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.4px;
+    }
+
+    .gps-pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--panel-bg);
+      backdrop-filter: blur(8px);
+      padding: 6px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--danger);
+      box-shadow: 0 0 8px var(--danger);
+    }
+    .dot.good { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+    .dot.warn { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
+
+    /* Main Camera Viewport */
+    .viewport {
+      position: relative;
+      flex: 1;
+      width: 100%;
+      height: 100%;
+      background: #000;
+      overflow: hidden;
+    }
+
+    video#camera-stream {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    /* Live Overlay HUD Preview */
+    .hud-overlay {
+      position: absolute;
+      bottom: 92px;
+      left: 12px;
+      right: 12px;
+      z-index: 15;
+      display: grid;
+      grid-template-columns: 115px 1fr;
+      gap: 10px;
+      background: var(--panel-bg);
+      backdrop-filter: blur(10px);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 10px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    }
+
+    .mini-map-wrapper {
+      position: relative;
+      width: 115px;
+      height: 115px;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.25);
+    }
+
+    #live-map {
+      width: 100%;
+      height: 100%;
+    }
+
+    .map-layer-toggle {
+      position: absolute;
+      bottom: 4px;
+      right: 4px;
+      z-index: 400;
+      background: rgba(15, 23, 42, 0.85);
+      color: #fff;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 2px 6px;
+      font-size: 10px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    .telemetry-info {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      font-size: 11.5px;
+      line-height: 1.35;
+      overflow: hidden;
+    }
+
+    .telemetry-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 4px;
+      margin-bottom: 4px;
+    }
+
+    .plot-tag {
+      color: var(--accent);
+      font-weight: 700;
+      font-size: 12.5px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .class-badge {
+      background: rgba(16, 185, 129, 0.2);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.4);
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 600;
+    }
+
+    .coord-row {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 11px;
+      color: #e2e8f0;
+    }
+
+    .meta-sub {
+      color: var(--text-muted);
+      font-size: 10.5px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Bottom Control Bar */
+    .control-bar {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 82px;
+      background: rgba(15, 23, 42, 0.95);
+      border-top: 1px solid var(--border);
+      z-index: 20;
+      display: flex;
+      justify-content: space-around;
+      align-items: center;
+      padding: 0 16px;
+    }
+
+    .btn-icon {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid var(--border);
+      color: var(--text-main);
+      width: 46px;
+      height: 46px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+      position: relative;
+    }
+
+    .btn-shutter {
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      background: #fff;
+      border: 4px solid var(--accent);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.1s ease;
+      box-shadow: 0 0 16px rgba(16, 185, 129, 0.5);
+    }
+
+    .btn-shutter:active {
+      transform: scale(0.92);
+    }
+
+    .btn-shutter-inner {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+
+    .badge-count {
+      position: absolute;
+      top: -4px;
+      right: -4px;
+      background: var(--accent);
+      color: #000;
+      font-size: 10px;
+      font-weight: 800;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* Modals / Drawers */
+    .drawer {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      background: rgba(15, 23, 42, 0.97);
+      display: none;
+      flex-direction: column;
+      padding: 18px;
+      overflow-y: auto;
+    }
+
+    .drawer.open {
+      display: flex;
+    }
+
+    .drawer-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 16px;
+    }
+
+    .drawer-header h2 {
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .btn-close {
+      background: rgba(255,255,255,0.1);
+      border: none;
+      color: #fff;
+      padding: 6px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    .form-group {
+      margin-bottom: 14px;
+    }
+
+    .form-group label {
+      display: block;
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+      font-weight: 600;
+    }
+
+    .form-group input, .form-group select, .form-group textarea {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.06);
+      color: #fff;
+      font-size: 14px;
+    }
+
+    /* Gallery Grid */
+    .gallery-actions {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+
+    .btn-action {
+      flex: 1;
+      background: var(--accent);
+      color: #052e16;
+      border: none;
+      padding: 10px;
+      border-radius: 8px;
+      font-weight: 700;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    .btn-action.secondary {
+      background: rgba(255, 255, 255, 0.12);
+      color: #fff;
+      border: 1px solid var(--border);
+    }
+
+    .gallery-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 14px;
+    }
+
+    .photo-card {
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .photo-card img {
+      width: 100%;
+      aspect-ratio: 4/3;
+      object-fit: cover;
+      background: #000;
+    }
+
+    .photo-card-footer {
+      padding: 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+    }
+
+    .photo-card-footer a {
+      background: var(--accent);
+      color: #000;
+      text-decoration: none;
+      padding: 5px 10px;
+      border-radius: 6px;
+      font-weight: 700;
+      font-size: 11px;
+    }
+
+    /* Flash Effect */
+    .flash-overlay {
+      position: fixed;
+      inset: 0;
+      background: #fff;
+      z-index: 100;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.15s ease;
+    }
+    .flash-overlay.active {
+      opacity: 0.85;
+    }
+
+    /* Crosshair hide Leaflet attribution clutter on tiny preview */
+    .leaflet-control-attribution, .leaflet-control-zoom {
+      display: none !important;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="flash-overlay" id="flash"></div>
+
+  <!-- Top Bar -->
+  <div class="top-bar">
+    <div class="brand-badge">
+      <span>🛰️ FieldView v3</span>
+    </div>
+    <div class="gps-pill" id="gps-pill">
+      <span class="dot" id="gps-dot"></span>
+      <span id="gps-status-text">Acquiring GPS...</span>
+    </div>
+  </div>
+
+  <!-- Main Camera Viewfinder -->
+  <div class="viewport">
+    <video id="camera-stream" autoplay playsinline muted></video>
+
+    <!-- Live Field HUD Preview -->
+    <div class="hud-overlay">
+      <div class="mini-map-wrapper">
+        <div id="live-map"></div>
+        <button class="map-layer-toggle" id="btn-layer-toggle" title="Switch Map Layer">SAT</button>
+      </div>
+
+      <div class="telemetry-info">
+        <div class="telemetry-header">
+          <span class="plot-tag" id="hud-plot">PLOT-001</span>
+          <span class="class-badge" id="hud-class">Cropland</span>
+        </div>
+        <div class="coord-row" id="hud-latlon">Lat: --.------ | Lon: --.------</div>
+        <div class="coord-row" id="hud-alt-acc">Alt: -- m | Acc: ±-- m</div>
+        <div class="meta-sub" id="hud-notes">Notes: Ground-truth validation sample</div>
+        <div class="meta-sub" id="hud-time">--</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bottom Controls -->
+  <div class="control-bar">
+    <button class="btn-icon" id="btn-open-meta" title="Edit Field Metadata">
+      📝
+    </button>
+
+    <button class="btn-icon" id="btn-flip-cam" title="Switch Camera">
+      🔄
+    </button>
+
+    <button class="btn-shutter" id="btn-capture" title="Capture Geo-Stamped Photo">
+      <div class="btn-shutter-inner"></div>
+    </button>
+
+    <button class="btn-icon" id="btn-open-gallery" title="Captured Log & Export">
+      🗂️
+      <span class="badge-count" id="capture-count">0</span>
+    </button>
+  </div>
+
+  <!-- Metadata Configuration Drawer -->
+  <div class="drawer" id="drawer-meta">
+    <div class="drawer-header">
+      <h2>Field Validation Metadata</h2>
+      <button class="btn-close" id="btn-close-meta">Done</button>
+    </div>
+
+    <div class="form-group">
+      <label>Project / Campaign Name</label>
+      <input type="text" id="input-project" value="LULC Field Validation Survey" />
+    </div>
+
+    <div class="form-group">
+      <label>Sample / Plot ID (Auto-increments on capture)</label>
+      <input type="text" id="input-plot" value="PLOT-001" />
+    </div>
+
+    <div class="form-group">
+      <label>Validation Class / Land Cover Category</label>
+      <select id="input-class">
+        <option value="Cropland">Cropland / Agriculture</option>
+        <option value="Built-up / Urban">Built-up / Urban</option>
+        <option value="Forest / Vegetation">Forest / Dense Vegetation</option>
+        <option value="Fallow / Barren">Fallow / Barren Land</option>
+        <option value="Waterbody / Wetland">Waterbody / Reservoir</option>
+        <option value="Mangrove / Coastal">Mangrove / Coastal</option>
+        <option value="Other">Other (See Notes)</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label>Embedded Map Zoom Level (14 = Regional, 17 = Field Plot)</label>
+      <select id="input-zoom">
+        <option value="15">Zoom 15 (Neighborhood / ~500m)</option>
+        <option value="16">Zoom 16 (Sub-sector / ~250m)</option>
+        <option value="17" selected>Zoom 17 (Field Plot / ~100m)</option>
+        <option value="18">Zoom 18 (Micro-plot / ~50m)</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label>Field Observer Notes</label>
+      <textarea id="input-notes" rows="3">Ground-truth validation sample</textarea>
+    </div>
+  </div>
+
+  <!-- Session Gallery & GIS Export Drawer -->
+  <div class="drawer" id="drawer-gallery">
+    <div class="drawer-header">
+      <h2>Captured Validation Log</h2>
+      <button class="btn-close" id="btn-close-gallery">Close</button>
+    </div>
+
+    <div class="gallery-actions">
+      <button class="btn-action" id="btn-export-csv">⬇️ Export CSV (QGIS)</button>
+      <button class="btn-action secondary" id="btn-export-geojson">⬇️ Export GeoJSON</button>
+    </div>
+
+    <div class="gallery-grid" id="gallery-container"></div>
+  </div>
+
+  <script>
+    /**************************************************************
+     * 1. STATE & CONFIGURATION
+     **************************************************************/
+    const state = {
+      lat: null,
+      lon: null,
+      accuracy: null,
+      altitude: null,
+      heading: null,
+      facingMode: "environment",
+      mapLayer: "satellite", // 'satellite' or 'osm'
+      captures: [],
+      stream: null
+    };
+
+    const TILE_SERVERS = {
+      satellite: {
+        name: "SAT",
+        // Esri World Imagery supports anonymous CORS for Canvas rendering
+        url: (z, x, y) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`,
+        leafletUrl: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+      },
+      osm: {
+        name: "OSM",
+        url: (z, x, y) => `https://tile.openstreetmap.org/${z}/${x}/${y}.png`,
+        leafletUrl: "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+      }
+    };
+
+    /**************************************************************
+     * 2. LIVE LEAFLET PREVIEW MAP
+     **************************************************************/
+    const map = L.map("live-map", {
+      zoomControl: false,
+      attributionControl: false,
+      dragging: false,
+      scrollWheelZoom: false,
+      doubleClickZoom: false
+    }).setView([19.1334, 72.9133], 16); // Default fallback coordinates
+
+    let currentTileLayer = L.tileLayer(TILE_SERVERS.satellite.leafletUrl, {
+      crossOrigin: true
+    }).addTo(map);
+
+    const posMarker = L.circleMarker([19.1334, 72.9133], {
+      radius: 6,
+      fillColor: "#10b981",
+      color: "#ffffff",
+      weight: 2,
+      fillOpacity: 1
+    }).addTo(map);
+
+    document.getElementById("btn-layer-toggle").addEventListener("click", () => {
+      state.mapLayer = state.mapLayer === "satellite" ? "osm" : "satellite";
+      const cfg = TILE_SERVERS[state.mapLayer];
+      document.getElementById("btn-layer-toggle").textContent = cfg.name;
+      map.removeLayer(currentTileLayer);
+      currentTileLayer = L.tileLayer(cfg.leafletUrl, { crossOrigin: true }).addTo(map);
+    });
+
+    /**************************************************************
+     * 3. CAMERA ENGINE
+     **************************************************************/
+    async function initCamera() {
+      if (state.stream) {
+        state.stream.getTracks().forEach(t => t.stop());
+      }
+      try {
+        const constraints = {
+          audio: false,
+          video: {
+            facingMode: { ideal: state.facingMode },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 }
+          }
+        };
+        state.stream = await navigator.mediaDevices.getUserMedia(constraints);
+        const videoEl = document.getElementById("camera-stream");
+        videoEl.srcObject = state.stream;
+      } catch (err) {
+        alert("Camera access failed. Please ensure you are on HTTPS or localhost and grant camera permissions.\n\nError: " + err.message);
+      }
+    }
+
+    document.getElementById("btn-flip-cam").addEventListener("click", () => {
+      state.facingMode = state.facingMode === "environment" ? "user" : "environment";
+      initCamera();
+    });
+
+    /**************************************************************
+     * 4. HIGH-ACCURACY GEOLOCATION ENGINE
+     **************************************************************/
+    function toDMS(deg, isLat) {
+      const absolute = Math.abs(deg);
+      const d = Math.floor(absolute);
+      const minNotTruncated = (absolute - d) * 60;
+      const m = Math.floor(minNotTruncated);
+      const s = ((minNotTruncated - m) * 60).toFixed(2);
+      const dir = isLat ? (deg >= 0 ? "N" : "S") : (deg >= 0 ? "E" : "W");
+      return `${d}°${m}'${s}"${dir}`;
+    }
+
+    function initGeolocation() {
+      if (!("geolocation" in navigator)) {
+        document.getElementById("gps-status-text").textContent = "GPS Unsupported";
+        return;
+      }
+
+      navigator.geolocation.watchPosition(
+        (pos) => {
+          state.lat = pos.coords.latitude;
+          state.lon = pos.coords.longitude;
+          state.accuracy = pos.coords.accuracy;
+          state.altitude = pos.coords.altitude;
+          state.heading = pos.coords.heading;
+
+          // Update GPS Pill
+          const dot = document.getElementById("gps-dot");
+          const statusText = document.getElementById("gps-status-text");
+          const acc = Math.round(state.accuracy);
+
+          dot.className = "dot " + (acc <= 12 ? "good" : acc <= 30 ? "warn" : "");
+          statusText.textContent = `GPS Lock (±${acc}m)`;
+
+          // Update HUD
+          document.getElementById("hud-latlon").textContent =
+            `Lat: ${state.lat.toFixed(6)}° | Lon: ${state.lon.toFixed(6)}°`;
+          const altStr = state.altitude !== null ? `${Math.round(state.altitude)} m` : "N/A";
+          document.getElementById("hud-alt-acc").textContent =
+            `Alt: ${altStr} | Acc: ±${acc} m`;
+
+          // Update Mini-Map
+          const zoom = parseInt(document.getElementById("input-zoom").value, 10);
+          map.setView([state.lat, state.lon], zoom);
+          posMarker.setLatLng([state.lat, state.lon]);
+        },
+        (err) => {
+          document.getElementById("gps-status-text").textContent = "GPS Signal Lost";
+          console.warn("Geolocation error:", err.message);
+        },
+        {
+          enableHighAccuracy: true,
+          maximumAge: 0,
+          timeout: 15000
+        }
+      );
+    }
+
+    // Live clock update
+    setInterval(() => {
+      const now = new Date();
+      document.getElementById("hud-time").textContent =
+        now.toLocaleString() + " (" + now.toISOString().slice(11, 19) + " UTC)";
+    }, 1000);
+
+    /**************************************************************
+     * 5. SLIPPY MAP TILE COMPOSITOR FOR CANVAS WATERMARKING
+     * Fetches 3x3 tiles around (lat, lon) with CORS enabled and
+     * centers the exact coordinate onto an offscreen canvas.
+     **************************************************************/
+    function latLonToTileXY(lat, lon, zoom) {
+      const n = Math.pow(2, zoom);
+      const xFloat = ((lon + 180) / 360) * n;
+      const latRad = (lat * Math.PI) / 180;
+      const yFloat =
+        ((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n;
+      return {
+        tileX: Math.floor(xFloat),
+        tileY: Math.floor(yFloat),
+        offsetX: Math.floor((xFloat - Math.floor(xFloat)) * 256),
+        offsetY: Math.floor((yFloat - Math.floor(yFloat)) * 256)
+      };
+    }
+
+    function loadTileImage(url) {
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.onload = () => resolve(img);
+        img.onerror = () => resolve(null);
+        img.src = url;
+      });
+    }
+
+    async function renderEmbeddedMapCanvas(lat, lon, zoom, layerType, boxSize) {
+      const mapCanvas = document.createElement("canvas");
+      mapCanvas.width = boxSize;
+      mapCanvas.height = boxSize;
+      const ctx = mapCanvas.getContext("2d");
+
+      // Dark fallback background
+      ctx.fillStyle = "#0f172a";
+      ctx.fillRect(0, 0, boxSize, boxSize);
+
+      if (lat !== null && lon !== null) {
+        const { tileX, tileY, offsetX, offsetY } = latLonToTileXY(lat, lon, zoom);
+        const centerCanvasX = boxSize / 2;
+        const centerCanvasY = boxSize / 2;
+        const urlBuilder = TILE_SERVERS[layerType].url;
+
+        // Fetch 3x3 grid of surrounding 256x256 tiles
+        const promises = [];
+        for (let dx = -1; dx <= 1; dx++) {
+          for (let dy = -1; dy <= 1; dy++) {
+            const url = urlBuilder(zoom, tileX + dx, tileY + dy);
+            promises.push(
+              loadTileImage(url).then((img) => ({ img, dx, dy }))
+            );
+          }
+        }
+
+        const tiles = await Promise.all(promises);
+        tiles.forEach(({ img, dx, dy }) => {
+          if (img) {
+            const drawX = centerCanvasX - offsetX + dx * 256;
+            const drawY = centerCanvasY - offsetY + dy * 256;
+            ctx.drawImage(img, drawX, drawY, 256, 256);
+          }
+        });
+      }
+
+      // Draw subtle grid overlay & target crosshair
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.25)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(boxSize / 2, 0);
+      ctx.lineTo(boxSize / 2, boxSize);
+      ctx.moveTo(0, boxSize / 2);
+      ctx.lineTo(boxSize, boxSize / 2);
+      ctx.stroke();
+
+      // Accuracy halo & center GPS pin
+      ctx.beginPath();
+      ctx.arc(boxSize / 2, boxSize / 2, 22, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(16, 185, 129, 0.28)";
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = "#10b981";
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(boxSize / 2, boxSize / 2, 6, 0, Math.PI * 2);
+      ctx.fillStyle = "#10b981";
+      ctx.fill();
+      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = "#ffffff";
+      ctx.stroke();
+
+      // North badge on map top-right
+      ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
+      ctx.fillRect(boxSize - 34, 8, 26, 24);
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "bold 12px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("▲N", boxSize - 21, 24);
+
+      // Map Layer & Zoom label on bottom-left
+      ctx.fillStyle = "rgba(15, 23, 42, 0.85)";
+      ctx.fillRect(6, boxSize - 24, 72, 18);
+      ctx.fillStyle = "#cbd5e1";
+      ctx.font = "bold 10px monospace";
+      ctx.textAlign = "left";
+      ctx.fillText(`${TILE_SERVERS[layerType].name} Z${zoom}`, 12, boxSize - 11);
+
+      return mapCanvas;
+    }
+
+    /**************************************************************
+     * 6. PHOTO CAPTURE & WATERMARK BURN-IN PIPELINE
+     **************************************************************/
+    function roundRect(ctx, x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+    }
+
+    function autoIncrementPlotId(plotStr) {
+      return plotStr.replace(/(\d+)$/, (match) => {
+        const num = parseInt(match, 10) + 1;
+        return String(num).padStart(match.length, "0");
+      });
+    }
+
+    document.getElementById("btn-capture").addEventListener("click", async () => {
+      const video = document.getElementById("camera-stream");
+      if (!video.videoWidth) return;
+
+      // Visual shutter flash
+      const flash = document.getElementById("flash");
+      flash.classList.add("active");
+      setTimeout(() => flash.classList.remove("active"), 160);
+
+      const width = video.videoWidth;
+      const height = video.videoHeight;
+
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+
+      // 1. Draw full-resolution camera frame
+      ctx.drawImage(video, 0, 0, width, height);
+
+      // 2. Scale watermark banner proportionally to image dimensions
+      const scale = Math.max(width, height) / 1280;
+      const pad = Math.round(20 * scale);
+      const cardHeight = Math.round(210 * scale);
+      const cardY = height - cardHeight - pad;
+      const cardWidth = width - pad * 2;
+
+      // Draw translucent dark backdrop card
+      ctx.save();
+      roundRect(ctx, pad, cardY, cardWidth, cardHeight, Math.round(16 * scale));
+      ctx.fillStyle = "rgba(15, 23, 42, 0.84)";
+      ctx.fill();
+      ctx.lineWidth = Math.max(1.5, 2 * scale);
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.22)";
+      ctx.stroke();
+      ctx.restore();
+
+      // 3. Render & draw embedded map inset inside card
+      const mapSize = cardHeight - Math.round(24 * scale);
+      const mapX = pad + Math.round(12 * scale);
+      const mapY = cardY + Math.round(12 * scale);
+      const zoom = parseInt(document.getElementById("input-zoom").value, 10);
+
+      const mapCanvas = await renderEmbeddedMapCanvas(
+        state.lat,
+        state.lon,
+        zoom,
+        state.mapLayer,
+        mapSize
+      );
+
+      ctx.save();
+      roundRect(ctx, mapX, mapY, mapSize, mapSize, Math.round(10 * scale));
+      ctx.clip();
+      ctx.drawImage(mapCanvas, mapX, mapY, mapSize, mapSize);
+      ctx.restore();
+
+      // Border around embedded map
+      ctx.save();
+      roundRect(ctx, mapX, mapY, mapSize, mapSize, Math.round(10 * scale));
+      ctx.lineWidth = Math.max(1.5, 2 * scale);
+      ctx.strokeStyle = "#10b981";
+      ctx.stroke();
+      ctx.restore();
+
+      // 4. Draw Field Validation Telemetry Text
+      const textX = mapX + mapSize + Math.round(18 * scale);
+      let cursorY = mapY + Math.round(22 * scale);
+      const lineGap = Math.round(27 * scale);
+
+      const project = document.getElementById("input-project").value.trim();
+      const plotId = document.getElementById("input-plot").value.trim();
+      const lulcClass = document.getElementById("input-class").value;
+      const notes = document.getElementById("input-notes").value.trim();
+      const now = new Date();
+
+      // Header: Plot ID + Validation Class + Project
+      ctx.fillStyle = "#10b981";
+      ctx.font = `bold ${Math.round(21 * scale)}px sans-serif`;
+      ctx.fillText(`${plotId}  •  ${lulcClass.toUpperCase()}`, textX, cursorY);
+
+      cursorY += lineGap;
+      ctx.fillStyle = "#ffffff";
+      ctx.font = `bold ${Math.round(18 * scale)}px monospace`;
+      if (state.lat !== null && state.lon !== null) {
+        const dmsLat = toDMS(state.lat, true);
+        const dmsLon = toDMS(state.lon, false);
+        ctx.fillText(
+          `GPS: ${state.lat.toFixed(6)}°, ${state.lon.toFixed(6)}° (${dmsLat} ${dmsLon})`,
+          textX,
+          cursorY
+        );
+      } else {
+        ctx.fillText("GPS: Coordinates Unacquired", textX, cursorY);
+      }
+
+      cursorY += lineGap;
+      ctx.fillStyle = "#e2e8f0";
+      ctx.font = `${Math.round(16 * scale)}px monospace`;
+      const altText = state.altitude !== null ? `${Math.round(state.altitude)}m ASL` : "N/A";
+      const accText = state.accuracy !== null ? `±${Math.round(state.accuracy)}m` : "N/A";
+      ctx.fillText(
+        `Altitude: ${altText}   |   Accuracy: ${accText}   |   Map: ${TILE_SERVERS[state.mapLayer].name} (Z${zoom})`,
+        textX,
+        cursorY
+      );
+
+      cursorY += lineGap;
+      ctx.fillStyle = "#cbd5e1";
+      ctx.font = `${Math.round(15 * scale)}px sans-serif`;
+      ctx.fillText(`Project: ${project} — Notes: ${notes}`, textX, cursorY);
+
+      cursorY += lineGap;
+      ctx.fillStyle = "#94a3b8";
+      ctx.font = `${Math.round(14 * scale)}px monospace`;
+      ctx.fillText(
+        `Captured: ${now.toLocaleString()}  |  UTC: ${now.toISOString()}`,
+        textX,
+        cursorY
+      );
+
+      // 5. Save JPEG and Log Entry
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
+      const safePlot = plotId.replace(/[^a-zA-Z0-9_-]/g, "_");
+      const filename = `${safePlot}_${now.toISOString().slice(0, 19).replace(/[:T]/g, "-")}.jpg`;
+
+      const record = {
+        id: state.captures.length + 1,
+        plotId,
+        project,
+        lulcClass,
+        lat: state.lat,
+        lon: state.lon,
+        altitude: state.altitude,
+        accuracy: state.accuracy,
+        timestampISO: now.toISOString(),
+        notes,
+        filename,
+        dataUrl
+      };
+
+      state.captures.unshift(record);
+      document.getElementById("capture-count").textContent = state.captures.length;
+      renderGallery();
+
+      // Auto-increment Plot ID for next sample
+      const nextPlot = autoIncrementPlotId(plotId);
+      document.getElementById("input-plot").value = nextPlot;
+      syncHudLabels();
+    });
+
+    /**************************************************************
+     * 7. UI DRAWERS, HUD SYNC & GIS EXPORTS (CSV / GEOJSON)
+     **************************************************************/
+    function syncHudLabels() {
+      document.getElementById("hud-plot").textContent =
+        document.getElementById("input-plot").value;
+      document.getElementById("hud-class").textContent =
+        document.getElementById("input-class").value;
+      document.getElementById("hud-notes").textContent =
+        "Notes: " + document.getElementById("input-notes").value;
+    }
+
+    document.getElementById("btn-open-meta").addEventListener("click", () => {
+      document.getElementById("drawer-meta").classList.add("open");
+    });
+
+    document.getElementById("btn-close-meta").addEventListener("click", () => {
+      syncHudLabels();
+      document.getElementById("drawer-meta").classList.remove("open");
+    });
+
+    document.getElementById("btn-open-gallery").addEventListener("click", () => {
+      document.getElementById("drawer-gallery").classList.add("open");
+    });
+
+    document.getElementById("btn-close-gallery").addEventListener("click", () => {
+      document.getElementById("drawer-gallery").classList.remove("open");
+    });
+
+    function renderGallery() {
+      const container = document.getElementById("gallery-container");
+      container.innerHTML = state.captures
+        .map(
+          (item) => `
+        <div class="photo-card">
+          <img src="${item.dataUrl}" alt="${item.plotId}" />
+          <div class="photo-card-footer">
+            <div>
+              <strong>${item.plotId}</strong> (${item.lulcClass})<br/>
+              <span style="color:#94a3b8;font-size:11px;">
+                ${item.lat ? item.lat.toFixed(5) + ", " + item.lon.toFixed(5) : "No GPS"}
+              </span>
+            </div>
+            <a href="${item.dataUrl}" download="${item.filename}">Save JPG</a>
+          </div>
+        </div>
+      `
+        )
+        .join("");
+    }
+
+    // Export CSV for QGIS / Python
+    document.getElementById("btn-export-csv").addEventListener("click", () => {
+      if (!state.captures.length) return alert("No field validation points captured yet.");
+      const headers = [
+        "id",
+        "plot_id",
+        "project",
+        "validation_class",
+        "latitude",
+        "longitude",
+        "altitude_m",
+        "gps_accuracy_m",
+        "timestamp_utc",
+        "notes",
+        "image_filename"
+      ];
+      const rows = state.captures.map((c) =>
+        [
+          c.id,
+          `"${c.plotId}"`,
+          `"${c.project}"`,
+          `"${c.lulcClass}"`,
+          c.lat ?? "",
+          c.lon ?? "",
+          c.altitude ?? "",
+          c.accuracy ?? "",
+          c.timestampISO,
+          `"${c.notes.replace(/"/g, '""')}"`,
+          `"${c.filename}"`
+        ].join(",")
+      );
+      const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows].join("\n");
+      const link = document.createElement("a");
+      link.href = encodeURI(csvContent);
+      link.download = `field_validation_log_${new Date().toISOString().slice(0, 10)}.csv`;
+      link.click();
+    });
+
+    // Export GeoJSON for direct drag-and-drop into QGIS / GEE
+    document.getElementById("btn-export-geojson").addEventListener("click", () => {
+      if (!state.captures.length) return alert("No field validation points captured yet.");
+      const geojson = {
+        type: "FeatureCollection",
+        features: state.captures
+          .filter((c) => c.lat !== null && c.lon !== null)
+          .map((c) => ({
+            type: "Feature",
+            geometry: {
+              type: "Point",
+              coordinates: [c.lon, c.lat, c.altitude || 0]
+            },
+            properties: {
+              id: c.id,
+              plot_id: c.plotId,
+              project: c.project,
+              validation_class: c.lulcClass,
+              gps_accuracy_m: c.accuracy,
+              timestamp_utc: c.timestampISO,
+              notes: c.notes,
+              image_filename: c.filename
+            }
+          }))
+      };
+      const blob = new Blob([JSON.stringify(geojson, null, 2)], { type: "application/json" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = `field_validation_${new Date().toISOString().slice(0, 10)}.geojson`;
+      link.click();
+    });
+
+    // Boot Application
+    window.addEventListener("DOMContentLoaded", () => {
+      syncHudLabels();
+      initCamera();
+      initGeolocation();
+    });
+  </script>
+</body>
+</html>
